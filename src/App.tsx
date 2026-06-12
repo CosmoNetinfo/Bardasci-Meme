@@ -21,15 +21,13 @@ import {
   Heart
 } from "lucide-react";
 import { MemeText, MemeTemplate, GlossaryItem, SavedMeme } from "./types";
-import { PRESET_TEMPLATES, STATIC_GLOSSARY, FUNNY_SUGGESTIONS } from "./templatesData";
+import { PRESET_TEMPLATES, FUNNY_SUGGESTIONS } from "./templatesData";
+import staticGlossary from "./data/glossario.json";
+import { translateText, generateCaptions, generateComic } from "./api/groq";
 import MemeCanvas from "./components/MemeCanvas";
 
 const getSafeImageUrl = (url: string | null | undefined) => {
   if (!url) return "";
-  if (url.startsWith("data:")) return url;
-  if (url.startsWith("http")) {
-    return `/api/proxy?url=${encodeURIComponent(url)}`;
-  }
   return url;
 };
 
@@ -46,7 +44,7 @@ export default function App() {
   const [aspectRatio, setAspectRatio] = useState<"1:1" | "16:9" | "4:3">("1:1");
 
   // Glossary and Translation States
-  const [glossary, setGlossary] = useState<GlossaryItem[]>(STATIC_GLOSSARY);
+  const [glossary, setGlossary] = useState<GlossaryItem[]>(staticGlossary);
   const [activeGlossaryTab, setActiveGlossaryTab] = useState<string>("all");
   const [searchWord, setSearchWord] = useState<string>("");
   const [italianInput, setItalianInput] = useState<string>("");
@@ -82,22 +80,9 @@ export default function App() {
     }
   });
 
-  // Fetch dictionary from server on mount to ensure we have the fully enriched dataset
+  // Setup dictionary and generate initial captions
   useEffect(() => {
-    fetch("/api/spoletino/glossary")
-      .then(res => {
-        if (!res.ok) throw new Error("Errore nel caricamento del glossario");
-        return res.json();
-      })
-      .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
-          setGlossary(data);
-        }
-      })
-      .catch(err => {
-        console.warn("Utilizzato glossario statico di fallback:", err.message);
-      });
-
+    setGlossary(staticGlossary);
     // Generate initial captions
     fetchCaptions("Generico");
   }, []);
@@ -162,13 +147,7 @@ export default function App() {
   const fetchCaptions = async (topic: string) => {
     setIsLoadingCaptions(true);
     try {
-      const res = await fetch("/api/spoletino/captions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic })
-      });
-      if (!res.ok) throw new Error();
-      const data = await res.json();
+      const data = await generateCaptions(topic);
       setSuggestedCaptions(data);
     } catch {
       // Fallback
@@ -183,7 +162,7 @@ export default function App() {
     }
   };
 
-  // Call the AI Translate server API
+  // Call the AI Translate API
   const handleTranslate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!italianInput.trim()) return;
@@ -192,13 +171,7 @@ export default function App() {
     setTranslationResult(null);
 
     try {
-      const res = await fetch("/api/spoletino/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: italianInput })
-      });
-      if (!res.ok) throw new Error("Errore del server");
-      const data = await res.json();
+      const data = await translateText(italianInput);
       setTranslationResult(data);
       showNotice("Traduzione completata!", "success");
     } catch (err: any) {
@@ -212,17 +185,11 @@ export default function App() {
     }
   };
 
-  // Call the AI Comic Dialogue server API
+  // Call the AI Comic Dialogue API
   const handleGenerateComicScript = async () => {
     setIsGeneratingComic(true);
     try {
-      const res = await fetch("/api/spoletino/comics", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ theme: comicThemeInput })
-      });
-      if (!res.ok) throw new Error();
-      const data = await res.json();
+      const data = await generateComic(comicThemeInput);
       setComicScript(data);
       showNotice("Sceneggiatura di fumetto generata!", "success");
     } catch {
@@ -763,24 +730,23 @@ export default function App() {
     }
 
     try {
-      const response = await fetch("/api/spoletino/glossary", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          word: newWord.trim(),
-          definition: newWordDefinition.trim(),
-          usage: newWordUsage.trim(),
-          phraseMean: newWordPhraseMean.trim()
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Errore sconosciuto");
+      const newGlossaryItem = {
+        word: newWord.trim(),
+        definition: newWordDefinition.trim(),
+        usage: newWordUsage.trim(),
+        phraseMean: newWordPhraseMean.trim()
+      };
+      
+      let updatedGlossary = [...glossary];
+      const existingIndex = updatedGlossary.findIndex(item => item.word.toLowerCase() === newGlossaryItem.word.toLowerCase());
+      
+      if (existingIndex !== -1) {
+        updatedGlossary[existingIndex] = newGlossaryItem;
+      } else {
+        updatedGlossary.unshift(newGlossaryItem);
       }
-
-      const data = await response.json();
-      setGlossary(data.glossary);
+      
+      setGlossary(updatedGlossary);
       
       showNotice(
         isEditingWord 
@@ -808,17 +774,8 @@ export default function App() {
     }
 
     try {
-      const response = await fetch(`/api/spoletino/glossary/${encodeURIComponent(wordToDelete)}`, {
-        method: "DELETE"
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Errore sconosciuto");
-      }
-
-      const data = await response.json();
-      setGlossary(data.glossary);
+      const updatedGlossary = glossary.filter(item => item.word.toLowerCase() !== wordToDelete.toLowerCase());
+      setGlossary(updatedGlossary);
       showNotice(`Parola '${wordToDelete}' cancellata dal database!`, "success");
     } catch (err: any) {
       showNotice(`Errore: ${err.message}`, "error");
