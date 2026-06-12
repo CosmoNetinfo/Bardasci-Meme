@@ -1,0 +1,6 @@
+{
+  "name": "Bardasci Meme",
+  "description": "Crea bellissimi meme e fumetti in dialetto spoletino con l'aiuto dell'AI e un editor interattivo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
